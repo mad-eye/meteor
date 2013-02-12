@@ -79,7 +79,11 @@
     events: function (eventMap) {
       var events =
             (this._tmpl_data.events = (this._tmpl_data.events || {}));
-      _.extend(events, eventMap);
+      console.log("Events:", events);
+      _.each(eventMap, function(callback, spec) {
+        events[spec] = (events[spec] || []);
+        events[spec].push(callback);
+      });
     },
     preserve: function (preserveMap) {
       var preserve =
@@ -146,11 +150,13 @@
           // for Spark, by inserting logic to create the template object.
           var wrapEventMap = function (oldEventMap) {
             var newEventMap = {};
-            _.each(oldEventMap, function (handler, key) {
-              newEventMap[key] = function (event, landmark) {
-                return handler.call(this, event,
-                                    templateObjFromLandmark(landmark));
-              };
+            _.each(oldEventMap, function (handlers, key) {
+              newEventMap[key] = _.map(handlers, function(handler) {
+                return function (event, landmark) {
+                  return handler.call(this, event,
+                                      templateObjFromLandmark(landmark));
+                };
+              });
             });
             return newEventMap;
           };
