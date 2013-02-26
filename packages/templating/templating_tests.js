@@ -808,10 +808,10 @@ Tinytest.add("templating - #each rendered callback", function (test) {
   var cbks = [];
   var xs = ['a','b','c'];
   tmpl.helpers({entries: function() {
-    return { observe: function (callbacks) {
+    return { observeChanges: function (callbacks) {
       cbks.push(callbacks);
-      _.each(xs, function(x, i) {
-        callbacks.added({x:x}, i);
+      _.each(xs, function(x) {
+        callbacks.addedBefore(x, {x:x}, null);
       });
       return {
         stop: function () {
@@ -832,7 +832,7 @@ Tinytest.add("templating - #each rendered callback", function (test) {
   buf.length = 0;
 
   _.each(cbks, function (callbacks) {
-    callbacks.moved({x:'a'}, 0, 2);
+    callbacks.movedBefore('a', null);
   });
   test.equal(buf, []);
   Meteor.flush();
@@ -958,10 +958,10 @@ Tinytest.add("templating - unlabeled cursor", function (test) {
   var div = OnscreenDiv(Meteor.render(function () {
     R.get(); // create dependency
     return Template.test_unlabeled_cursor_a0(
-      {observe: function (callbacks) {
-        callbacks.added({}, 0);
-        callbacks.added({}, 1);
-        callbacks.added({}, 2);
+      {observeChanges: function (callbacks) {
+        callbacks.addedBefore('0', {}, null);
+        callbacks.addedBefore('1', {}, null);
+        callbacks.addedBefore('2', {}, null);
         return { stop: function () {} };
       }}
     );
@@ -1032,3 +1032,39 @@ Tinytest.add('templating - helper typecast Issue #617', function (test) {
       "[object]");
 });
 
+Tinytest.add("templating - tricky branch labels", function (test) {
+  // regression test for issue #724
+
+  var loading = ReactiveVar(true);
+  var v = ReactiveVar(1);
+
+  var x = [];
+
+  Template.test_template_trickylabels_a0.loading = function () {
+    return loading.get();
+  };
+
+  Template.test_template_trickylabels_a1.v = function () {
+    return v.get();
+  };
+
+  _.extend(Template.test_template_trickylabels_a2, {
+    created: function () { x.push('c'); },
+    rendered: function () { x.push('r'); },
+    destroyed: function () { x.push('d'); }
+  });
+
+  var div = OnscreenDiv(Meteor.render(Template.test_template_trickylabels_a0));
+  Meteor.flush();
+  loading.set(false);
+  Meteor.flush();
+  x.length = 0;
+
+  v.set(2);
+  Meteor.flush();
+  test.equal(x.join(''), 'r'); // no 'c' or 'd'
+  test.equal(div.html().replace(/\s+/g, ''), '<div>foo</div>2<div>bar</div>');
+
+  div.kill();
+  Meteor.flush();
+});

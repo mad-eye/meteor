@@ -1,14 +1,87 @@
 var running = true;
 
+var resultTree = [];
+var failedTests = [];
+var resultDeps = new Meteor.deps._ContextSet;
+var countDeps = new Meteor.deps._ContextSet;
+var totalCount = 0;
+var passedCount = 0;
+var failedCount = 0;
+
+
+Session.setDefault("groupPath", ["tinytest"]);
+Session.set("rerunScheduled", false);
+
 Meteor.startup(function () {
+  Meteor.flush();
   Meteor._runTestsEverywhere(reportResults, function () {
     running = false;
     Meteor.onTestsComplete && Meteor.onTestsComplete();
     _resultsChanged();
     Meteor.flush();
-    // scroll to top so we can see global pass/fail
-    $("html, body").scrollTop(0);
-  });
+  }, Session.get("groupPath"));
+
+});
+
+Template.progressBar.running = function () {
+  countDeps.addCurrentContext();
+  return passedCount + failedCount < totalCount;
+};
+
+Template.progressBar.percentPass = function () {
+  countDeps.addCurrentContext();
+  if (totalCount === 0)
+    return 0;
+  return 100*passedCount/totalCount;
+};
+
+Template.progressBar.percentFail = function () {
+  countDeps.addCurrentContext();
+  if (totalCount === 0)
+    return 0;
+  return 100*failedCount/totalCount;
+};
+
+Template.progressBar.anyFail = function () {
+  countDeps.addCurrentContext();
+  return failedCount > 0;
+};
+
+Template.groupNav.groupPaths = function () {
+  var groupPath = Session.get("groupPath");
+  var ret = [];
+  for (var i = 1; i <= groupPath.length; i++) {
+    ret.push({path: groupPath.slice(0,i), name: groupPath[i-1]});
+  }
+  return ret;
+};
+
+Template.groupNav.rerunScheduled = function () {
+  return Session.get("rerunScheduled");
+};
+
+var changeToPath = function (path) {
+  Session.set("groupPath", path);
+  Session.set("rerunScheduled", true);
+  // pretend there's just been a hot code push
+  // so we run the tests completely fresh.
+  Meteor._reload.reload();
+};
+
+Template.groupNav.events({
+  "click .group": function () {
+    changeToPath(this.path);
+  },
+  "click .rerun": function () {
+    Session.set("rerunScheduled", true);
+    Meteor._reload.reload();
+  }
+});
+
+Template.test_group.events({
+  "click .groupname": function () {
+    changeToPath(this.path);
+  }
 });
 
 Template.test_table.running = function() {
@@ -203,10 +276,6 @@ Template.event.is_debuggable = function() {
 };
 
 
-var resultTree = [];
-var failedTests = [];
-var resultDeps = new Meteor.deps._ContextSet;
-
 var _resultsChanged = function() {
   resultDeps.invalidateAll();
 };
@@ -247,21 +316,26 @@ var _testStatus = function(t) {
 // possibly 'events'.
 var _findTestForResults = function (results) {
   var groupPath = results.groupPath; // array
-
   if ((! _.isArray(groupPath)) || (groupPath.length < 1)) {
     throw new Error("Test must be part of a group");
   }
 
   var group;
+  var i = 0;
   _.each(groupPath, function(gname) {
     var array = (group ? (group.groups || (group.groups = []))
                  : resultTree);
     var newGroup = _.find(array, function(g) { return g.name === gname; });
     if (! newGroup) {
-      newGroup = {name: gname, parent: (group || null)}; // create group
+      newGroup = {
+        name: gname,
+        parent: (group || null),
+        path: groupPath.slice(0, i+1)
+      }; // create group
       array.push(newGroup);
     }
     group = newGroup;
+    i++;
   });
 
   var testName = results.test;
@@ -276,6 +350,8 @@ var _findTestForResults = function (results) {
     var fullName = nameParts.join(' - ');
     test = {name: testName, parent: group, server: server, fullName: fullName};
     group.tests.push(test);
+    totalCount++;
+    countDeps.invalidateAll();
   }
 
   return test;
@@ -301,23 +377,35 @@ var reportResults = function(results) {
     });
     test.events = out;
   }
-
-  if (_testStatus(test) === "failed") {
+  var status = _testStatus(test);
+  if (status === "failed") {
+    failedCount++;
+    countDeps.invalidateAll();
     // Expand a failed test (but only set this if the user hasn't clicked on the
     // test name yet).
     if (test.expanded === undefined)
       test.expanded = true;
     if (!_.contains(failedTests, test.fullName))
       failedTests.push(test.fullName);
+  } else if (status === "succeeded") {
+    passedCount++;
+    countDeps.invalidateAll();
   }
 
   _.defer(_throttled_update);
 };
 
 // forget all of the events for a particular test
-var forgetEvents = function (test) {
-  var test = _findTestForResults(test);
-
+var forgetEvents = function (results) {
+  var test = _findTestForResults(results);
+  var status = _testStatus(test);
+  if (status === "failed") {
+    failedCount--;
+    countDeps.invalidateAll();
+  } else if (status === "succeeded") {
+    passedCount--;
+    countDeps.invalidateAll();
+  }
   delete test.events;
   _resultsChanged();
 };
